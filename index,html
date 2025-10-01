@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>xedventure</title>
+  <style>
+    html,body{height:100%;margin:0;background:#87ceeb;}
+    canvas{display:block;margin:0 auto;background:linear-gradient(#87ceeb 0%, #9fd9ff 60%, #6fc7a9 100%);} 
+    #ui{position:fixed;left:8px;top:8px;background:rgba(255,255,255,0.8);padding:8px;border-radius:6px;font-family:sans-serif}
+    a{color:#06f}
+  </style>
+</head>
+<body>
+  <div id="ui">Controls: A / ← and D / → to move — Space to jump — Hold Shift to run — Refresh to reset</div>
+  <canvas id="game"></canvas>
+
+<script>
+// -----------------------------
+// Config
+// -----------------------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const DPR = Math.max(1, window.devicePixelRatio || 1);
+let W = 960, H = 600;
+function resize(){
+  W = Math.min(window.innerWidth, 1280);
+  H = Math.min(window.innerHeight, 800);
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Tile / chunk system
+const TILE = 32;            // pixels per tile
+const CHUNK_TILES = 20;     // tiles per chunk horizontally
+const CHUNK_PX = CHUNK_TILES * TILE;
+const GROUND_LEVEL = 12;    // baseline tile height for noise
+
+// Player
+const player = {
+  x: W/2,
+  y: 0,
+  vx: 0,
+  vy: 0,
+  w: 22,
+  h: 36,
+  onGround: false
+};
+
+// Camera follows player horizontally; keep player near center
+let cameraX = 0;
+
+// Input
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; e.key === ' ' && e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// Procedural noise - 1D Perlin implementation (deterministic)
+function buildPermutation(seed){
+  const p = new Uint8Array(512);
+  let arr = new Array(256).fill(0).map((_,i)=>i);
+  let s = seed | 0;
+  for(let i=255;i>0;i--){
+    s = (s * 1664525 + 1013904223) | 0;
+    const r = Math.abs(s) % (i+1);
+    const tmp = arr[i]; arr[i] = arr[r]; arr[r] = tmp;
+  }
+  for(let i=0;i<512;i++) p[i]=arr[i&255];
+  return p;
+}
+
+function fade(t){ return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a,b,t){ return a + t*(b-a); }
+function grad(hash,x){
+  // gradient for 1D
+  return ((hash & 1) === 0) ? x : -x;
+}
+
+const PERM = buildPermutation(123456); // seed — change for different worlds
+function perlin1D(x){
+  const xi = Math.floor(x) & 255;
+  const xf = x - Math.floor(x);
+  const a = PERM[xi];
+  const b = PERM[xi+1];
+  const u = fade(xf);
+  const g1 = grad(a, xf);
+  const g2 = grad(b, xf-1);
+  return lerp(g1, g2, u);
+}
+
+// layered noise for rougher terrain
+function octaveNoise(x, octaves=4, persistence=0.5, scale=0.01){
+  let total = 0, freq = scale, amp = 1, max = 0;
+  for(let i=0;i<octaves;i++){
+    total += perlin1D(x * freq) * amp;
+    max += amp;
+    amp *= persistence;
+    freq *= 2;
+  }
+  return total / max; // normalized roughly [-1,1]
+}
+
+// Terrain chunk storage
+const chunks = new Map(); // key -> chunk object {xIndex, heights[]}
+
+function genChunk(xIndex){
+  if(chunks.has(xIndex)) return chunks.get(xIndex);
+  const heights = new Array(CHUNK_TILES);
+  for(let tx=0; tx<CHUNK_TILES; tx++){
+    const worldX = (xIndex * CHUNK_TILES + tx);
+    // layered noise -> tile height
+    const n = octaveNoise(worldX, 5, 0.45, 0.08);
+    // shape it into usable tile height
+    const tileH = Math.floor(GROUND_LEVEL + n * 4 + Math.sin(worldX*0.15)*1.2);
+    heights[tx] = tileH; // number of ground tiles from bottom
+  }
+  const chunk = {xIndex, heights};
+  chunks.set(xIndex, chunk);
+  // keep only a limited number of chunks to avoid memory bloat
+  if(chunks.size > 30){
+    // remove farthest from player
+    let farKey = null; let farDist = -1;
+    for(const [k,v] of chunks.entries()){
+      const dx = Math.abs(k - Math.floor(player.x / CHUNK_PX));
+      if(dx > farDist){ farDist = dx; farKey = k; }
+    }
+    if(farKey !== null) chunks.delete(farKey);
+  }
+  return chunk;
+}
+
+function getHeightAtWorldX(px){
+  // returns top-of-ground y coordinate in pixels
+  const worldTileX = Math.floor(px / TILE);
+  const xIndex = Math.floor(worldTileX / CHUNK_TILES);
+  const chunk = genChunk(xIndex);
+  const tx = (worldTileX - xIndex*CHUNK_TILES);
+  const tileH = chunk.heights[(tx%CHUNK_TILES+CHUNK_TILES)%CHUNK_TILES];
+  const groundPixelY = H - tileH * TILE;
+  return groundPixelY;
+}
+
+// Draw terrain
+function drawTerrain(camX){
+  // determine visible chunk range
+  const leftWorldX = camX - W/2 - CHUNK_PX;
+  const rightWorldX = camX + W/2 + CHUNK_PX;
+  const leftTile = Math.floor(leftWorldX / TILE);
+  const rightTile = Math.floor(rightWorldX / TILE);
+  const leftChunk = Math.floor(leftTile / CHUNK_TILES);
+  const rightChunk = Math.floor(rightTile / CHUNK_TILES);
+
+  // draw grassy blocks column by column for a nice 2D look
+  for(let cx = leftChunk; cx <= rightChunk; cx++){
+    const chunk = genChunk(cx);
+    for(let tx=0; tx<CHUNK_TILES; tx++){
+      const tileH = chunk.heights[tx];
+      const worldX = (cx*CHUNK_TILES + tx) * TILE;
+      const screenX = Math.round(worldX - camX + W/2);
+      // draw grass on top tile and soil below
+      const grassY = H - tileH * TILE;
+      // grass tile
+      ctx.fillStyle = '#6bbf4a';
+      ctx.fillRect(screenX, grassY, TILE, TILE);
+      // soil below
+      ctx.fillStyle = '#7b4f3b';
+      ctx.fillRect(screenX, grassY + TILE, TILE, (tileH-1)*TILE);
+      // add simple shading lines to give 2D tile feel
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      ctx.fillRect(screenX, grassY + TILE, TILE, 2);
+
+      // draw small grass blades variation
+      ctx.fillStyle = '#4aa23a';
+      const blades = 3;
+      for(let b=0;b<blades;b++){
+        const bx = screenX + 4 + b*8;
+        const by = grassY + 6 + Math.floor((perlin1D((worldX+b)/50)+1)*4);
+        ctx.fillRect(bx, by, 1.5, 6);
+      }
+    }
+  }
+}
+
+// Simple bean guy draw
+function drawPlayer(){
+  const sx = Math.round(W/2 - player.w/2);
+  const sy = Math.round(player.y - player.h);
+  // shadow
+  ctx.beginPath(); ctx.ellipse(sx + player.w/2, player.y + 6, player.w*0.6, 6, 0, 0, Math.PI*2); ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fill();
+  // body (bean-shaped)
+  ctx.save();
+  ctx.translate(sx + player.w/2, sy + player.h/2);
+  ctx.rotate(Math.sin(player.x*0.02 + player.vx*0.1) * 0.08);
+  // main bean
+  ctx.beginPath();
+  ctx.ellipse(0, 0, player.w/2, player.h/2, 0, 0, Math.PI*2);
+  ctx.fillStyle = '#ffdd88'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#c88f3a'; ctx.stroke();
+  // eyes
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.ellipse(-5, -6, 3, 3, 0, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.ellipse(5, -6, 3, 3, 0, 0, Math.PI*2); ctx.fill();
+  // smile
+  ctx.beginPath(); ctx.arc(0, -0, 6, 0.15*Math.PI, 0.85*Math.PI); ctx.lineWidth = 2; ctx.strokeStyle = '#8a4f1c'; ctx.stroke();
+  ctx.restore();
+}
+
+// Physics and game loop
+const GRAV = 1500; // px/s^2
+const MOVE_SPEED = 220; // px/s
+const RUN_MULT = 1.8;
+const JUMP_V = -540; // px/s
+let last = performance.now();
+
+function update(dt){
+  // controls
+  let left = keys['ArrowLeft'] || keys['a'] || keys['A'];
+  let right = keys['ArrowRight'] || keys['d'] || keys['D'];
+  const run = keys['Shift'] || keys['ShiftLeft'] || keys['ShiftRight'];
+
+  const targetSpeed = (right ? 1 : 0) - (left ? 1 : 0);
+  const speed = MOVE_SPEED * (run ? RUN_MULT : 1);
+  const accel = 3000;
+  const desiredVx = targetSpeed * speed;
+  // smooth accel
+  player.vx += Math.sign(desiredVx - player.vx) * Math.min(Math.abs(desiredVx - player.vx), accel * dt);
+
+  // jump
+  if((keys[' '] || keys['Spacebar']) && player.onGround){
+    player.vy = JUMP_V;
+    player.onGround = false;
+  }
+
+  // apply gravity
+  player.vy += GRAV * dt;
+
+  // integrate
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // collision with terrain
+  const groundY = getHeightAtWorldX(player.x);
+  if(player.y > groundY){
+    player.y = groundY;
+    player.vy = 0;
+    player.onGround = true;
+  }
+
+  // keep player within y bounds (ceiling)
+  if(player.y < 0) { player.y = 0; player.vy = 0; }
+
+  // camera follows
+  cameraX = player.x;
+}
+
+function step(){
+  const now = performance.now();
+  const dt = Math.min(1/30, (now - last) / 1000);
+  last = now;
+  update(dt);
+
+  // draw
+  // sky background gradient already set on canvas background; clear only main layer
+  ctx.clearRect(0,0,W,H);
+
+  // draw terrain
+  drawTerrain(cameraX);
+
+  // draw decorations: distant hills
+  drawHills();
+
+  // draw player
+  drawPlayer();
+
+  // HUD (speed)
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.font = '14px sans-serif';
+  const speedText = `Speed: ${Math.round(player.vx)} px/s ${player.onGround? ' (ground)':'(air)'}`;
+  ctx.fillText(speedText, 10, H - 10);
+
+  requestAnimationFrame(step);
+}
+
+function drawHills(){
+  // simple parallax hills
+  const cam = cameraX;
+  for(let layer=0; layer<3; layer++){
+    ctx.beginPath();
+    const par = 0.2 + layer*0.18;
+    const yBase = 120 + layer*40;
+    ctx.moveTo(0, H);
+    for(let x=0; x<=W; x+=10){
+      const worldX = cam*par + x;
+      const h = Math.sin(worldX*0.004 + layer) * (30 + layer*20) + yBase;
+      ctx.lineTo(x, h);
+    }
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(100,160,100,${0.08 + layer*0.06})`;
+    ctx.fill();
+  }
+}
+
+// initialize player's vertical position to be standing on terrain
+player.x = 0;
+player.y = getHeightAtWorldX(player.x);
+player.onGround = true;
+
+requestAnimationFrame(step);
+
+// allow clicking to focus
+canvas.addEventListener('click', ()=> window.focus());
+
+</script>
+</body>
+</html>
