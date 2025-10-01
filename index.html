@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>xedventure</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bean Guy Adventure Enhanced</title>
 <style>
 html,body{height:100%;margin:0;background:#87ceeb;}
 canvas{display:block;margin:0 auto;}
@@ -16,23 +16,23 @@ background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;font-family:
 </style>
 </head>
 <body>
-<div id="ui">Controls: A/D or ←/→ to move, Space to jump, Shift to run, R to reset, Q to switch mode, 1-5 to select hotbar slot</div>
+<div id="ui">Controls: A/D or ←/→ to move, Space to jump, Shift to run, R to reset, Q to switch mode, 1-5 to select hotbar slot, Left-click to mine/swing, Right-click to place</div>
 <div id="tip">Tip: if Bean-guy is still walking even when movement controls aren’t pressed, click R to reset movement — it should fix it.</div>
 <div id="hotbar">
   <div class="slot selected" id="slot0">Sword</div>
   <div class="slot" id="slot1">Pickaxe</div>
-  <div class="slot" id="slot2"></div>
-  <div class="slot" id="slot3"></div>
-  <div class="slot" id="slot4"></div>
+  <div class="slot" id="slot2">Grass</div>
+  <div class="slot" id="slot3">Dirt</div>
+  <div class="slot" id="slot4">Stone</div>
 </div>
 <canvas id="game"></canvas>
 <script>
 const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 let W=960,H=600;
 function resize(){W=Math.min(window.innerWidth,1280);H=Math.min(window.innerHeight,800);
-canvas.width=W*window.devicePixelRatio;canvas.height=H*window.devicePixelRatio;
+canvas.width=W*devicePixelRatio;canvas.height=H*devicePixelRatio;
 canvas.style.width=W+'px';canvas.style.height=H+'px';
-ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);}
+ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
 window.addEventListener('resize',resize);resize();
 
 // Constants
@@ -55,6 +55,8 @@ window.addEventListener('keydown',e=>{
   if('12345'.includes(e.key)){selectedSlot=parseInt(e.key)-1;updateHotbar();}
 });
 window.addEventListener('keyup',e=>{keys[e.key]=false;});
+canvas.addEventListener('mousedown',handleMouseDown);
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
 function updateHotbar(){hotbarSlots.forEach((s,i)=>i===selectedSlot?s.classList.add('selected'):s.classList.remove('selected'));}
 
 // Noise
@@ -113,7 +115,7 @@ function drawPlayer(){drawBean(W/2,player.y-player.h/2,'#ffdd88','smile');}
 
 // Zombies
 const zombies=[];
-function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false,alive:true});}
+function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false,alive:true,hp:3});}
 function updateZombies(dt){for(const z of zombies){if(!z.alive) continue;const dx=player.x-z.x,dist=Math.abs(dx);if(dist<10*TILE) z.vx=Math.sign(dx)*80; else z.vx=0;
 z.vy+=1500*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y>groundY){z.y=groundY;z.vy=0;z.onGround=true;}
 if(Math.abs(z.x-player.x)<20&&Math.abs(z.y-player.y)<30){spawnParticles(player.x,player.y,10,3,'white');}}}
@@ -144,6 +146,25 @@ function drawTerrain(camX){
       }
     }
   }
+}
+
+// Mouse & block interactions
+function worldCoords(mx,my){return [mx-cameraX+W/2,my];}
+function handleMouseDown(e){
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const [wx,wy]=worldCoords(mx,my);
+  const tileX=Math.floor(wx/TILE),tileY=Math.floor((H-wy)/TILE);
+  const chunkX=Math.floor(tileX/CHUNK_TILES),tx=(tileX-chunkX*CHUNK_TILES+CHUNK_TILES)%CHUNK_TILES;
+  const chunk=genChunk(chunkX);
+  if(e.button===0){ // left click
+    if(mode==='build'){ // break
+      const block=chunk.tiles[tx][tileY];if(block){spawnParticles(tileX*TILE+TILE/2,H-tileY*TILE+TILE/2,6,3,block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555');chunk.tiles[tx][tileY]=null;}}
+    else{ // combat
+      const range=50;
+      zombies.forEach(z=>{if(!z.alive) return;const dx=Math.abs(z.x-player.x),dy=Math.abs(z.y-player.y);if(dx<range&&dy<range){z.hp--;spawnParticles(z.x,z.y,8,3,'white');if(z.hp<=0)z.alive=false;}});}
+  } else if(e.button===2 && mode==='build'){ // right click place
+    const blockType=['grass','dirt','stone'][selectedSlot-2];if(blockType && !chunk.tiles[tx][tileY]) chunk.tiles[tx][tileY]=blockType;}
 }
 
 // Game loop
