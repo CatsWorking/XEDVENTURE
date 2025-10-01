@@ -3,14 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>xedventure</title>
+<title>Bean Guy Adventure Fixed</title>
 <style>
 html,body{height:100%;margin:0;background:#87ceeb;}
-canvas{display:block;margin:0 auto;background:linear-gradient(#87ceeb 0%, #9fd9ff 60%, #6fc7a9 100%);} 
+canvas{display:block;margin:0 auto;}
 #ui{position:fixed;left:8px;top:8px;background:rgba(255,255,255,0.8);padding:8px;border-radius:6px;font-family:sans-serif;z-index:10;}
 #tip{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
-     background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;
-     font-family:sans-serif;font-size:14px;opacity:0;transition:opacity 1.5s ease;z-index:10;}
+background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;font-family:sans-serif;font-size:14px;opacity:0;transition:opacity 1.5s ease;z-index:10;}
 #hotbar{position:fixed;bottom:40px;left:50%;transform:translateX(-50%);display:flex;z-index:10;}
 .slot{width:50px;height:50px;margin:2px;border:2px solid #222;border-radius:4px;background:rgba(255,255,255,0.7);display:flex;justify-content:center;align-items:center;font-weight:bold;font-family:sans-serif;}
 .selected{border-color:#ff0;border-width:3px;}
@@ -32,14 +31,15 @@ const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 let W=960,H=600;
 function resize(){W=Math.min(window.innerWidth,1280);H=Math.min(window.innerHeight,800);
 canvas.width=W*window.devicePixelRatio;canvas.height=H*window.devicePixelRatio;
-canvas.style.width=W+'px';canvas.style.height=H+'px';ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);}
+canvas.style.width=W+'px';canvas.style.height=H+'px';
+ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);}
 window.addEventListener('resize',resize);resize();
 
 // Constants
 const TILE=32,CHUNK_TILES=20,CHUNK_PX=CHUNK_TILES*TILE,GROUND_LEVEL=12;
 
 // Player
-const player={x:0,y:0,vx:0,vy:0,w:22,h:36,onGround:false,prevVy:0};
+const player={x:0,y:0,vx:0,vy:0,w:22,h:36,onGround:false};
 
 // Camera
 let cameraX=0;
@@ -67,11 +67,11 @@ const PERM=buildPermutation(123456);
 function perlin1D(x){const xi=Math.floor(x)&255,xf=x-Math.floor(x),a=PERM[xi],b=PERM[xi+1],u=fade(xf);return lerp(grad(a,xf),grad(b,xf-1),u);}
 function octaveNoise(x,oct=4,p=0.5,s=0.01){let total=0,f=s,amp=1,max=0;for(let i=0;i<oct;i++){total+=perlin1D(x*f)*amp;max+=amp;amp*=p;f*=2;}return total/max;}
 
-// Terrain + caves
+// Terrain + caves + grass blades
 const chunks=new Map();
 function genChunk(xIndex){
   if(chunks.has(xIndex)) return chunks.get(xIndex);
-  const tiles=[];
+  const tiles=[]; 
   for(let tx=0;tx<CHUNK_TILES;tx++){
     const worldX=xIndex*CHUNK_TILES+tx;
     const n=octaveNoise(worldX,5,0.45,0.08);
@@ -88,6 +88,8 @@ function genChunk(xIndex){
         }
       }
     }
+    // Grass blades stored
+    for(let y=0;y<30;y++){if(tiles[tx][y]==='grass'){tiles[tx][y+'_blades']=Array.from({length:3},()=>Math.random()*TILE);}}
   }
   const chunk={xIndex,tiles};chunks.set(xIndex,chunk);return chunk;
 }
@@ -103,7 +105,7 @@ function spawnParticles(x,y,count,size,color){for(let i=0;i<count;i++){particles
 function updateParticles(dt){for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=400*dt;p.age+=dt;if(p.age>p.life)particles.splice(i,1);}}
 function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=1-(p.age/p.life);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x-cameraX+W/2,p.y,p.size,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;}
 
-// Drawing
+// Draw Bean
 function drawBean(x,y,color,face){ctx.save();ctx.translate(x,y);ctx.beginPath();ctx.ellipse(0,0,11,18,0,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='#222';ctx.lineWidth=2;ctx.stroke();
 ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-5,-6,3,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(5,-6,3,0,Math.PI*2);ctx.fill();
 ctx.beginPath();if(face==='smile') ctx.arc(0,0,6,0.15*Math.PI,0.85*Math.PI); else ctx.arc(0,4,6,1.15*Math.PI,1.85*Math.PI);ctx.stroke();ctx.restore();}
@@ -111,25 +113,19 @@ function drawPlayer(){drawBean(W/2,player.y-player.h/2,'#ffdd88','smile');}
 
 // Zombies
 const zombies=[];
-function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false});}
-function updateZombies(dt){for(const z of zombies){const dx=player.x-z.x,dist=Math.abs(dx);if(dist<10*TILE) z.vx=Math.sign(dx)*80; else z.vx=0;
+function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false,alive:true});}
+function updateZombies(dt){for(const z of zombies){if(!z.alive) continue;const dx=player.x-z.x,dist=Math.abs(dx);if(dist<10*TILE) z.vx=Math.sign(dx)*80; else z.vx=0;
 z.vy+=1500*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y>groundY){z.y=groundY;z.vy=0;z.onGround=true;}
-if(Math.abs(z.x-player.x)<20&&Math.abs(z.y-player.y)<30){console.log('Ouch! Zombie hit you!');}}}
-function drawZombies(){for(const z of zombies){drawBean(z.x-cameraX+W/2,z.y-z.h/2,'#88cc88','frown');}}
+if(Math.abs(z.x-player.x)<20&&Math.abs(z.y-player.y)<30){spawnParticles(player.x,player.y,10,3,'white');}}}
+function drawZombies(){for(const z of zombies){if(!z.alive) continue;drawBean(z.x-cameraX+W/2,z.y-z.h/2,'#88cc88','frown');}}
 
-// Draw Terrain + Hills
+// Draw Terrain
 function drawTerrain(camX){
-  // Background hills parallax
-  for(let l=0;l<3;l++){
-    ctx.beginPath();
-    ctx.fillStyle=['#77c77a','#66b266','#559955'][l];
-    for(let x=-CHUNK_PX*2;x<W+CHUNK_PX*2;x+=CHUNK_PX/2){
-      const y=H/2+Math.sin((x+camX*l*0.5)*0.005)*50+50*l;
-      ctx.lineTo(x, y);
-    }
-    ctx.lineTo(W, H); ctx.lineTo(0,H); ctx.closePath();ctx.fill();
-  }
-  // Terrain blocks
+  // Background mountains
+  for(let l=0;l<3;l++){ctx.beginPath();ctx.fillStyle=['#77c77a','#66b266','#559955'][l];
+  for(let x=-CHUNK_PX*2;x<W+CHUNK_PX*2;x+=CHUNK_PX/2){const y=H/2+Math.sin((x+camX*l*0.5)*0.005)*50+50*l;ctx.lineTo(x,y);}
+  ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath(); ctx.fill();}
+  
   const leftWorldX=camX-W/2-CHUNK_PX,rightWorldX=camX+W/2+CHUNK_PX;
   const leftChunk=Math.floor(Math.floor(leftWorldX/TILE)/CHUNK_TILES);
   const rightChunk=Math.floor(Math.floor(rightWorldX/TILE)/CHUNK_TILES);
@@ -143,8 +139,8 @@ function drawTerrain(camX){
         ctx.fillRect(sx,sy,TILE,TILE);
         // Shadows
         ctx.fillStyle='rgba(0,0,0,0.1)';ctx.fillRect(sx,sy,TILE,4);
-        // Grass blades
-        if(block==='grass'){ctx.strokeStyle='#4ea036';for(let i=0;i<3;i++){ctx.beginPath();ctx.moveTo(sx+Math.random()*TILE,sy);ctx.lineTo(sx+Math.random()*TILE,sy-6);ctx.stroke();}}
+        // Grass blades stable
+        if(block==='grass'){ctx.strokeStyle='#4ea036';chunk.tiles[tx][y+'_blades'].forEach(off=>{ctx.beginPath();ctx.moveTo(sx+off,sy);ctx.lineTo(sx+off,sy-6);ctx.stroke();});}
       }
     }
   }
@@ -173,7 +169,8 @@ ctx.clearRect(0,0,W,H);drawTerrain(cameraX);drawPlayer();drawZombies();drawParti
 
 // Init
 player.x=0;player.y=getHeightAtWorldX(player.x);player.onGround=true;
-spawnZombie(200,getHeightAtWorldX(200));spawnZombie(-300,getHeightAtWorldX(-300));
+spawnZombie(200,getHeightAtWorldX(200));
+spawnZombie(-300,getHeightAtWorldX(-300));
 requestAnimationFrame(step);
 
 // tip fade
