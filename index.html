@@ -8,10 +8,14 @@
     html,body{height:100%;margin:0;background:#87ceeb;}
     canvas{display:block;margin:0 auto;background:linear-gradient(#87ceeb 0%, #9fd9ff 60%, #6fc7a9 100%);} 
     #ui{position:fixed;left:8px;top:8px;background:rgba(255,255,255,0.8);padding:8px;border-radius:6px;font-family:sans-serif}
+    #tip{position:fixed;bottom:8px;left:50%;transform:translateX(-50%);
+         background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;
+         font-family:sans-serif;font-size:14px;opacity:0;transition:opacity 1.5s ease;}
   </style>
 </head>
 <body>
-  <div id="ui">Controls: A / ← and D / → to move — Space to jump — Hold Shift to run — Refresh to reset</div>
+  <div id="ui">Controls: A / ← and D / → to move — Space to jump — Hold Shift to run — R to reset movement — Refresh to reset</div>
+  <div id="tip">Tip: if Bean-guy is still walking even when movement controls aren’t pressed, click R to reset movement — it should fix it.</div>
   <canvas id="game"></canvas>
 
 <script>
@@ -50,7 +54,18 @@ const player = {
 let cameraX = 0;
 
 const keys = {};
-window.addEventListener('keydown', e => { keys[e.key] = true; if(e.key === ' ') e.preventDefault(); });
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if(e.key === ' ') e.preventDefault();
+  if(e.key === 'r' || e.key === 'R'){
+    // Reset movement when R is pressed
+    player.vx = 0;
+    player.vy = 0;
+    keys['a'] = keys['A'] = keys['ArrowLeft'] = false;
+    keys['d'] = keys['D'] = keys['ArrowRight'] = false;
+    keys[' '] = keys['Spacebar'] = false;
+  }
+});
 window.addEventListener('keyup', e => { keys[e.key] = false; });
 
 function buildPermutation(seed){
@@ -307,6 +322,15 @@ player.onGround = true;
 
 requestAnimationFrame(step);
 canvas.addEventListener('click', ()=> window.focus());
+
+// Fade in the tip, then fade it out after a delay
+const tip = document.getElementById('tip');
+setTimeout(() => {
+  tip.style.opacity = 1; // fade in
+  setTimeout(() => {
+    tip.style.opacity = 0; // fade out
+  }, 8000); // show for 8 seconds
+}, 500); // initial delay before showing
 </script>
 </body>
 </html>
