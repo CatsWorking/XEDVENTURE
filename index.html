@@ -29,10 +29,15 @@ background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;font-family:
 <script>
 const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 let W=960,H=600;
-function resize(){W=Math.min(window.innerWidth,1280);H=Math.min(window.innerHeight,800);
-canvas.width=W*devicePixelRatio;canvas.height=H*devicePixelRatio;
-canvas.style.width=W+'px';canvas.style.height=H+'px';
-ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
+function resize(){
+    W=Math.min(window.innerWidth,1280);
+    H=Math.min(window.innerHeight,800);
+    canvas.width=W*devicePixelRatio;
+    canvas.height=H*devicePixelRatio;
+    canvas.style.width=W+'px';
+    canvas.style.height=H+'px';
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
 window.addEventListener('resize',resize);resize();
 
 // Constants
@@ -50,7 +55,12 @@ let mode='build',selectedSlot=0;
 const hotbarSlots=[...Array(5).keys()].map(i=>document.getElementById('slot'+i));
 window.addEventListener('keydown',e=>{
   keys[e.key]=true;if(e.key===' ')e.preventDefault();
-  if(e.key==='r'||e.key==='R'){player.vx=0;player.vy=0;keys['a']=keys['A']=keys['ArrowLeft']=false;keys['d']=keys['D']=keys['ArrowRight']=false;keys[' ']=keys['Spacebar']=false;}
+  if(e.key==='r'||e.key==='R'){
+    player.vx=0;player.vy=0;
+    keys['a']=keys['A']=keys['ArrowLeft']=false;
+    keys['d']=keys['D']=keys['ArrowRight']=false;
+    keys[' ']=false;
+  }
   if(e.key==='q'||e.key==='Q'){mode=(mode==='build'?'combat':'build');}
   if('12345'.includes(e.key)){selectedSlot=parseInt(e.key)-1;updateHotbar();}
 });
@@ -104,7 +114,7 @@ function getHeightAtWorldX(px){
 // Particles
 const particles=[];
 function spawnParticles(x,y,count,size,color){for(let i=0;i<count;i++){particles.push({x,y,vx:(Math.random()-0.5)*40,vy:-Math.random()*60,life:0.4+Math.random()*0.3,age:0,size,color});}}
-function updateParticles(dt){for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=400*dt;p.age+=dt;if(p.age>p.life)particles.splice(i,1);}}
+function updateParticles(dt){for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=GRAV*dt;p.age+=dt;if(p.age>p.life)particles.splice(i,1);}}
 function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=1-(p.age/p.life);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x-cameraX+W/2,p.y,p.size,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;}
 
 // Draw Bean
@@ -117,7 +127,7 @@ function drawPlayer(){drawBean(W/2,player.y-player.h/2,'#ffdd88','smile');}
 const zombies=[];
 function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false,alive:true,hp:3});}
 function updateZombies(dt){for(const z of zombies){if(!z.alive) continue;const dx=player.x-z.x,dist=Math.abs(dx);if(dist<10*TILE) z.vx=Math.sign(dx)*80; else z.vx=0;
-z.vy+=1500*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y>groundY){z.y=groundY;z.vy=0;z.onGround=true;}
+z.vy+=GRAV*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y>groundY){z.y=groundY;z.vy=0;z.onGround=true;}
 if(Math.abs(z.x-player.x)<20&&Math.abs(z.y-player.y)<30){spawnParticles(player.x,player.y,10,3,'white');}}}
 function drawZombies(){for(const z of zombies){if(!z.alive) continue;drawBean(z.x-cameraX+W/2,z.y-z.h/2,'#88cc88','frown');}}
 
@@ -139,9 +149,7 @@ function drawTerrain(camX){
         const wx=(cx*CHUNK_TILES+tx)*TILE, sx=wx-camX+W/2, sy=H-y*TILE;
         ctx.fillStyle=block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555';
         ctx.fillRect(sx,sy,TILE,TILE);
-        // Shadows
         ctx.fillStyle='rgba(0,0,0,0.1)';ctx.fillRect(sx,sy,TILE,4);
-        // Grass blades stable
         if(block==='grass'){ctx.strokeStyle='#4ea036';chunk.tiles[tx][y+'_blades'].forEach(off=>{ctx.beginPath();ctx.moveTo(sx+off,sy);ctx.lineTo(sx+off,sy-6);ctx.stroke();});}
       }
     }
@@ -149,22 +157,35 @@ function drawTerrain(camX){
 }
 
 // Mouse & block interactions
-function worldCoords(mx,my){return [mx-cameraX+W/2,my];}
+function worldCoords(mx,my){return [mx-cameraX+W/2, H-my];}
 function handleMouseDown(e){
   const rect=canvas.getBoundingClientRect();
   const mx=e.clientX-rect.left,my=e.clientY-rect.top;
   const [wx,wy]=worldCoords(mx,my);
-  const tileX=Math.floor(wx/TILE),tileY=Math.floor((H-wy)/TILE);
+  const tileX=Math.floor(wx/TILE),tileY=Math.floor(wy/TILE);
   const chunkX=Math.floor(tileX/CHUNK_TILES),tx=(tileX-chunkX*CHUNK_TILES+CHUNK_TILES)%CHUNK_TILES;
   const chunk=genChunk(chunkX);
   if(e.button===0){ // left click
-    if(mode==='build'){ // break
-      const block=chunk.tiles[tx][tileY];if(block){spawnParticles(tileX*TILE+TILE/2,H-tileY*TILE+TILE/2,6,3,block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555');chunk.tiles[tx][tileY]=null;}}
-    else{ // combat
+    if(mode==='build'){ 
+      const block=chunk.tiles[tx][tileY];
+      if(block){
+        spawnParticles(tileX*TILE+TILE/2,H-tileY*TILE+TILE/2,6,3,block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555');
+        chunk.tiles[tx][tileY]=null;
+      }
+    } else { // combat
       const range=50;
-      zombies.forEach(z=>{if(!z.alive) return;const dx=Math.abs(z.x-player.x),dy=Math.abs(z.y-player.y);if(dx<range&&dy<range){z.hp--;spawnParticles(z.x,z.y,8,3,'white');if(z.hp<=0)z.alive=false;}});}
+      zombies.forEach(z=>{
+        if(!z.alive) return;
+        const dx=Math.abs(z.x-player.x),dy=Math.abs(z.y-player.y);
+        if(dx<range&&dy<range){z.hp--;spawnParticles(z.x,z.y,8,3,'white');if(z.hp<=0)z.alive=false;}
+      });
+    }
   } else if(e.button===2 && mode==='build'){ // right click place
-    const blockType=['grass','dirt','stone'][selectedSlot-2];if(blockType && !chunk.tiles[tx][tileY]) chunk.tiles[tx][tileY]=blockType;}
+    if(selectedSlot>=2 && selectedSlot<=4){
+      const blockType=['grass','dirt','stone'][selectedSlot-2];
+      if(!chunk.tiles[tx][tileY]) chunk.tiles[tx][tileY]=blockType;
+    }
+  }
 }
 
 // Game loop
@@ -178,7 +199,7 @@ function update(dt){
   const desiredVx=inputDir*speed;
   if(inputDir===0){const friction=Math.pow(0.0005,dt);player.vx*=friction;if(Math.abs(player.vx)<0.5)player.vx=0;}
   else{player.vx+=Math.sign(desiredVx-player.vx)*Math.min(Math.abs(desiredVx-player.vx),accel*dt);}
-  if((keys[' ']||keys['Spacebar'])&&player.onGround){player.vy=JUMP_V;player.onGround=false;spawnParticles(player.x,player.y,6,3,'white');}
+  if(keys[' ']&&player.onGround){player.vy=JUMP_V;player.onGround=false;spawnParticles(player.x,player.y,6,3,'white');}
   player.vy+=GRAV*dt;player.x+=player.vx*dt;player.y+=player.vy*dt;
   const groundY=getHeightAtWorldX(player.x);if(player.y>groundY){player.y=groundY;player.vy=0;player.onGround=true;}
   cameraX=player.x;
