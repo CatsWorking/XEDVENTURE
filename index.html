@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bean Guy Adventure Enhanced</title>
+<title>XEDVENTURE</title>
 <style>
 html,body{height:100%;margin:0;background:#87ceeb;}
 canvas{display:block;margin:0 auto;}
@@ -30,26 +30,27 @@ background:rgba(255,255,255,0.8);padding:6px 10px;border-radius:6px;font-family:
 const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
 let W=960,H=600;
 function resize(){
-    W=Math.min(window.innerWidth,1280);
-    H=Math.min(window.innerHeight,800);
-    canvas.width=W*devicePixelRatio;
-    canvas.height=H*devicePixelRatio;
-    canvas.style.width=W+'px';
-    canvas.style.height=H+'px';
-    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  W=Math.min(window.innerWidth,1280);
+  H=Math.min(window.innerHeight,800);
+  canvas.width=W*devicePixelRatio;
+  canvas.height=H*devicePixelRatio;
+  canvas.style.width=W+'px';
+  canvas.style.height=H+'px';
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
 }
 window.addEventListener('resize',resize);resize();
 
-// Constants
+// === Constants ===
 const TILE=32,CHUNK_TILES=20,CHUNK_PX=CHUNK_TILES*TILE,GROUND_LEVEL=12;
+const GRAV=1500,MOVE_SPEED=220,RUN_MULT=1.8,JUMP_V=-540;
 
-// Player
+// === Player ===
 const player={x:0,y:0,vx:0,vy:0,w:22,h:36,onGround:false};
 
-// Camera
-let cameraX=0;
+// === Camera (now with Y) ===
+let cameraX=0,cameraY=0;
 
-// Input
+// === Input ===
 const keys={};
 let mode='build',selectedSlot=0;
 const hotbarSlots=[...Array(5).keys()].map(i=>document.getElementById('slot'+i));
@@ -69,7 +70,7 @@ canvas.addEventListener('mousedown',handleMouseDown);
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
 function updateHotbar(){hotbarSlots.forEach((s,i)=>i===selectedSlot?s.classList.add('selected'):s.classList.remove('selected'));}
 
-// Noise
+// === Noise ===
 function buildPermutation(seed){const p=new Uint8Array(512);let arr=Array.from({length:256},(_,i)=>i);let s=seed|0;
 for(let i=255;i>0;i--){s=(s*1664525+1013904223)|0;const r=Math.abs(s)%(i+1);[arr[i],arr[r]]=[arr[r],arr[i]];}for(let i=0;i<512;i++)p[i]=arr[i&255];return p;}
 function fade(t){return t*t*t*(t*(t*6-15)+10);}
@@ -79,7 +80,22 @@ const PERM=buildPermutation(123456);
 function perlin1D(x){const xi=Math.floor(x)&255,xf=x-Math.floor(x),a=PERM[xi],b=PERM[xi+1],u=fade(xf);return lerp(grad(a,xf),grad(b,xf-1),u);}
 function octaveNoise(x,oct=4,p=0.5,s=0.01){let total=0,f=s,amp=1,max=0;for(let i=0;i<oct;i++){total+=perlin1D(x*f)*amp;max+=amp;amp*=p;f*=2;}return total/max;}
 
-// Terrain + caves + grass blades
+// --- NEW: 2D Perlin for caves ---
+function perlin2D(x, y) {
+  const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+  const xf = x - Math.floor(x), yf = y - Math.floor(y);
+  const a = PERM[xi] + yi;
+  const b = PERM[xi + 1] + yi;
+  const u = fade(xf), v = fade(yf);
+  const grad2 = (hash, x, y) => ((hash & 1) === 0 ? x : -x) + ((hash & 2) === 0 ? y : -y);
+  return lerp(
+    lerp(grad2(PERM[a], xf, yf), grad2(PERM[b], xf - 1, yf), u),
+    lerp(grad2(PERM[a + 1], xf, yf - 1), grad2(PERM[b + 1], xf - 1, yf - 1), u),
+    v
+  );
+}
+
+// === Terrain + caves ===
 const chunks=new Map();
 function genChunk(xIndex){
   if(chunks.has(xIndex)) return chunks.get(xIndex);
@@ -89,51 +105,52 @@ function genChunk(xIndex){
     const n=octaveNoise(worldX,5,0.45,0.08);
     const tileH=Math.floor(GROUND_LEVEL+n*4+Math.sin(worldX*0.15)*1.2);
     tiles[tx]=[];
-    for(let y=0;y<30;y++){
+    for(let y=0;y<80;y++){ // deeper world
       if(y<tileH){
-        let cave=octaveNoise(worldX*2+y*2,3,0.5,0.08);
-        if(cave>0.35&&y>5) tiles[tx][y]=null;
+        const cave=perlin2D(worldX*0.15,y*0.25);
+        if(cave>0.25 && y>5) tiles[tx][y]=null;
         else{
           if(y===tileH-1) tiles[tx][y]='grass';
-          else if(y>=tileH-3) tiles[tx][y]='stone';
-          else tiles[tx][y]='dirt';
+          else if(y>=tileH-4) tiles[tx][y]='dirt';
+          else tiles[tx][y]='stone';
         }
       }
     }
-    // Grass blades stored
-    for(let y=0;y<30;y++){if(tiles[tx][y]==='grass'){tiles[tx][y+'_blades']=Array.from({length:3},()=>Math.random()*TILE);}}
+    // Grass blades
+    for(let y=0;y<80;y++){if(tiles[tx][y]==='grass'){tiles[tx][y+'_blades']=Array.from({length:3},()=>Math.random()*TILE);}}
   }
   const chunk={xIndex,tiles};chunks.set(xIndex,chunk);return chunk;
 }
 function getHeightAtWorldX(px){
   const wx=Math.floor(px/TILE),xIndex=Math.floor(wx/CHUNK_TILES);
   const chunk=genChunk(xIndex);const tx=(wx-xIndex*CHUNK_TILES+CHUNK_TILES)%CHUNK_TILES;
-  for(let y=29;y>=0;y--) if(chunk.tiles[tx][y]) return H-y*TILE;return H;
+  for(let y=79;y>=0;y--) if(chunk.tiles[tx][y]) return (y+1)*TILE;
+  return 0;
 }
 
-// Particles
+// === Particles ===
 const particles=[];
 function spawnParticles(x,y,count,size,color){for(let i=0;i<count;i++){particles.push({x,y,vx:(Math.random()-0.5)*40,vy:-Math.random()*60,life:0.4+Math.random()*0.3,age:0,size,color});}}
 function updateParticles(dt){for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=GRAV*dt;p.age+=dt;if(p.age>p.life)particles.splice(i,1);}}
-function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=1-(p.age/p.life);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x-cameraX+W/2,p.y,p.size,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;}
+function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=1-(p.age/p.life);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x-cameraX+W/2,p.y-cameraY+H/2,p.size,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;}
 
-// Draw Bean
+// === Drawing ===
 function drawBean(x,y,color,face){ctx.save();ctx.translate(x,y);ctx.beginPath();ctx.ellipse(0,0,11,18,0,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.strokeStyle='#222';ctx.lineWidth=2;ctx.stroke();
 ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-5,-6,3,0,Math.PI*2);ctx.fill();ctx.beginPath();ctx.arc(5,-6,3,0,Math.PI*2);ctx.fill();
 ctx.beginPath();if(face==='smile') ctx.arc(0,0,6,0.15*Math.PI,0.85*Math.PI); else ctx.arc(0,4,6,1.15*Math.PI,1.85*Math.PI);ctx.stroke();ctx.restore();}
-function drawPlayer(){drawBean(W/2,player.y-player.h/2,'#ffdd88','smile');}
+function drawPlayer(){drawBean(W/2,H/2-(player.y-cameraY)-player.h/2,'#ffdd88','smile');}
 
-// Zombies
+// === Zombies ===
 const zombies=[];
 function spawnZombie(x,y){zombies.push({x,y,w:22,h:36,vx:0,vy:0,onGround:false,alive:true,hp:3});}
 function updateZombies(dt){for(const z of zombies){if(!z.alive) continue;const dx=player.x-z.x,dist=Math.abs(dx);if(dist<10*TILE) z.vx=Math.sign(dx)*80; else z.vx=0;
-z.vy+=GRAV*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y>groundY){z.y=groundY;z.vy=0;z.onGround=true;}
+z.vy+=GRAV*dt; z.x+=z.vx*dt; z.y+=z.vy*dt; const groundY=getHeightAtWorldX(z.x);if(z.y<groundY){z.y=groundY;z.vy=0;z.onGround=true;}
 if(Math.abs(z.x-player.x)<20&&Math.abs(z.y-player.y)<30){spawnParticles(player.x,player.y,10,3,'white');}}}
-function drawZombies(){for(const z of zombies){if(!z.alive) continue;drawBean(z.x-cameraX+W/2,z.y-z.h/2,'#88cc88','frown');}}
+function drawZombies(){for(const z of zombies){if(!z.alive) continue;drawBean(z.x-cameraX+W/2,H/2-(z.y-cameraY)-z.h/2,'#88cc88','frown');}}
 
-// Draw Terrain
-function drawTerrain(camX){
-  // Background mountains
+// === Terrain Drawing ===
+function drawTerrain(camX,camY){
+  // Background
   for(let l=0;l<3;l++){ctx.beginPath();ctx.fillStyle=['#77c77a','#66b266','#559955'][l];
   for(let x=-CHUNK_PX*2;x<W+CHUNK_PX*2;x+=CHUNK_PX/2){const y=H/2+Math.sin((x+camX*l*0.5)*0.005)*50+50*l;ctx.lineTo(x,y);}
   ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath(); ctx.fill();}
@@ -144,9 +161,11 @@ function drawTerrain(camX){
   for(let cx=leftChunk;cx<=rightChunk;cx++){
     const chunk=genChunk(cx);
     for(let tx=0;tx<CHUNK_TILES;tx++){
-      for(let y=0;y<30;y++){
+      for(let y=0;y<80;y++){
         const block=chunk.tiles[tx][y];if(!block) continue;
-        const wx=(cx*CHUNK_TILES+tx)*TILE, sx=wx-camX+W/2, sy=H-y*TILE;
+        const wx=(cx*CHUNK_TILES+tx)*TILE;
+        const sx=wx-camX+W/2;
+        const sy=H/2-(y*TILE-camY);
         ctx.fillStyle=block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555';
         ctx.fillRect(sx,sy,TILE,TILE);
         ctx.fillStyle='rgba(0,0,0,0.1)';ctx.fillRect(sx,sy,TILE,4);
@@ -156,8 +175,10 @@ function drawTerrain(camX){
   }
 }
 
-// Mouse & block interactions
-function worldCoords(mx,my){return [mx-cameraX+W/2, H-my];}
+// === Mouse & Blocks ===
+function worldCoords(mx,my){
+  return [mx - W/2 + cameraX, (H/2 - my) + cameraY];
+}
 function handleMouseDown(e){
   const rect=canvas.getBoundingClientRect();
   const mx=e.clientX-rect.left,my=e.clientY-rect.top;
@@ -165,22 +186,29 @@ function handleMouseDown(e){
   const tileX=Math.floor(wx/TILE),tileY=Math.floor(wy/TILE);
   const chunkX=Math.floor(tileX/CHUNK_TILES),tx=(tileX-chunkX*CHUNK_TILES+CHUNK_TILES)%CHUNK_TILES;
   const chunk=genChunk(chunkX);
-  if(e.button===0){ // left click
+  
+  // distance check
+  const maxReach=6; 
+  const dx=Math.abs(tileX-Math.floor(player.x/TILE));
+  const dy=Math.abs(tileY-Math.floor(player.y/TILE));
+  if(dx>maxReach||dy>maxReach)return;
+  
+  if(e.button===0){ // Left click
     if(mode==='build'){ 
       const block=chunk.tiles[tx][tileY];
       if(block){
-        spawnParticles(tileX*TILE+TILE/2,H-tileY*TILE+TILE/2,6,3,block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555');
+        spawnParticles(tileX*TILE+TILE/2,tileY*TILE+TILE/2,6,3,block==='grass'?'#6bbf4a':block==='dirt'?'#7b4f3b':'#555');
         chunk.tiles[tx][tileY]=null;
       }
-    } else { // combat
+    } else { // Combat
       const range=50;
       zombies.forEach(z=>{
-        if(!z.alive) return;
+        if(!z.alive)return;
         const dx=Math.abs(z.x-player.x),dy=Math.abs(z.y-player.y);
         if(dx<range&&dy<range){z.hp--;spawnParticles(z.x,z.y,8,3,'white');if(z.hp<=0)z.alive=false;}
       });
     }
-  } else if(e.button===2 && mode==='build'){ // right click place
+  } else if(e.button===2 && mode==='build'){ // Right click place
     if(selectedSlot>=2 && selectedSlot<=4){
       const blockType=['grass','dirt','stone'][selectedSlot-2];
       if(!chunk.tiles[tx][tileY]) chunk.tiles[tx][tileY]=blockType;
@@ -188,12 +216,12 @@ function handleMouseDown(e){
   }
 }
 
-// Game loop
-const GRAV=1500,MOVE_SPEED=220,RUN_MULT=1.8,JUMP_V=-540;
+// === Update + Camera ===
 let last=performance.now();
 function update(dt){
-  const left=keys['ArrowLeft']||keys['a']||keys['A'],right=keys['ArrowRight']||keys['d']||keys['D'];
-  const run=keys['Shift']||keys['ShiftLeft']||keys['ShiftRight'];
+  const left=keys['ArrowLeft']||keys['a']||keys['A'],
+        right=keys['ArrowRight']||keys['d']||keys['D'],
+        run=keys['Shift']||keys['ShiftLeft']||keys['ShiftRight'];
   let inputDir=0;if(left)inputDir--;if(right)inputDir++;
   const speed=MOVE_SPEED*(run?RUN_MULT:1),accel=3000;
   const desiredVx=inputDir*speed;
@@ -201,21 +229,36 @@ function update(dt){
   else{player.vx+=Math.sign(desiredVx-player.vx)*Math.min(Math.abs(desiredVx-player.vx),accel*dt);}
   if(keys[' ']&&player.onGround){player.vy=JUMP_V;player.onGround=false;spawnParticles(player.x,player.y,6,3,'white');}
   player.vy+=GRAV*dt;player.x+=player.vx*dt;player.y+=player.vy*dt;
-  const groundY=getHeightAtWorldX(player.x);if(player.y>groundY){player.y=groundY;player.vy=0;player.onGround=true;}
-  cameraX=player.x;
+  const groundY=getHeightAtWorldX(player.x);if(player.y<groundY){player.y=groundY;player.vy=0;player.onGround=true;}
+  
+  // Smooth camera follow (X & Y)
+  const smooth=0.15;
+  const targetX=player.x;
+  const targetY=player.y-100;
+  cameraX+= (targetX-cameraX)*smooth;
+  cameraY+= (targetY-cameraY)*smooth;
+
   updateParticles(dt);
   updateZombies(dt);
 }
-function step(){const now=performance.now();const dt=Math.min(1/30,(now-last)/1000);last=now;update(dt);
-ctx.clearRect(0,0,W,H);drawTerrain(cameraX);drawPlayer();drawZombies();drawParticles();requestAnimationFrame(step);}
 
-// Init
+function step(){
+  const now=performance.now();const dt=Math.min(1/30,(now-last)/1000);last=now;update(dt);
+  ctx.clearRect(0,0,W,H);
+  drawTerrain(cameraX,cameraY);
+  drawPlayer();
+  drawZombies();
+  drawParticles();
+  requestAnimationFrame(step);
+}
+
+// === Init ===
 player.x=0;player.y=getHeightAtWorldX(player.x);player.onGround=true;
 spawnZombie(200,getHeightAtWorldX(200));
 spawnZombie(-300,getHeightAtWorldX(-300));
 requestAnimationFrame(step);
 
-// tip fade
+// === Tip ===
 const tip=document.getElementById('tip');setTimeout(()=>{tip.style.opacity=1;setTimeout(()=>{tip.style.opacity=0;},8000);},500);
 updateHotbar();
 </script>
